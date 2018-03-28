@@ -4,6 +4,8 @@ import (
 	"dahuaevents2mqtt/camera"
 	"dahuaevents2mqtt/config"
 	"fmt"
+	"dahuaevents2mqtt/event"
+	MQTT "dahuaevents2mqtt/mqtt"
 )
 
 func main() {
@@ -12,26 +14,18 @@ func main() {
 
 	fmt.Printf("Configuration: %+v\n", configuration)
 
-	camChan := make(chan camera.Event, 0)
+	eventChan := make(chan event.Event, len(configuration.Cameras))
 
-	cam := camera.Init(camera.Config{
-		Topic:    "/openhab/parking_motion/state/set",
-		Map:      map[string]string{
-			"Start": "ON",
-			"Stop": "OFF",
-		},
-		Host:     "192.168.1.194",
-		Port:     "80",
-		Username: "admin",
-		Password: "admin",
-		Events:   []string{"VideoMotion"},
-	}, camChan)
-	cam.Do()
+	mqtt := MQTT.Init(configuration.MQTT, eventChan)
 
-	for {
-		select {
-		case event := <- camChan:
-			fmt.Printf("%+v\n", event)
+
+	for i, camConfig := range configuration.Cameras {
+		cam, err := camera.Init(camConfig, eventChan)
+		if err != nil {
+			panic(fmt.Errorf("init: cam %d (%s/[%s] error", i, camConfig.Host, camConfig.Topic))
 		}
+		cam.ReceiveEvents()
 	}
+
+	mqtt.SendEvents()
 }

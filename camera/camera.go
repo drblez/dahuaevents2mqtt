@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"errors"
+	"dahuaevents2mqtt/event"
 )
 
 type Config struct {
@@ -16,32 +18,54 @@ type Config struct {
 	Username string
 	Password string
 	Events   []string
+	ReconnectTimeout int
 }
 
 type camera struct {
-	config       Config
-	client       *http.Client
-	connected    bool
-	eventChannel chan Event
+	config           Config
+	client           *http.Client
+	connected        bool
+	eventChannel     chan event.Event
+	reconnectTimeout time.Duration
 }
 
-type Event struct {
-	Topic  string
-	Camera string
-	Code   string
-	Action string
-	Index  string
-}
-
-func Init(config Config, channel chan Event) *camera {
+func Init(config Config, channel chan event.Event) (*camera, error) {
 	camera := new(camera)
 	camera.config = config
+	if camera.config.Topic == "" {
+		return nil, errors.New("config: Topic can't be empty")
+	}
+	if camera.config.Host == "" {
+		return nil, errors.New("config: Host can't be empty")
+	}
+	if camera.config.Events == nil {
+		camera.config.Events = []string{"VideoMotion"}
+	}
+	if camera.config.Port == "" {
+		camera.config.Port = "80"
+	}
+	if camera.config.Username == "" {
+		camera.config.Username = "admin"
+	}
+	if camera.config.Password == "" {
+		camera.config.Password = "admin"
+	}
 	camera.client = &http.Client{}
+	camera.client.Transport = &http.Transport{}
 	camera.eventChannel = channel
-	return camera
+	if config.ReconnectTimeout == 0 {
+		camera.reconnectTimeout = 1 * time.Second
+	} else {
+		camera.reconnectTimeout = time.Duration(config.ReconnectTimeout) * time.Second
+	}
+	return camera, nil
 }
 
-func (camera *camera) Do() {
+func (camera *camera) Connected() bool {
+	return camera.connected
+}
+
+func (camera *camera) ReceiveEvents() {
 
 	const dataBlockSize = 1024
 
@@ -53,42 +77,47 @@ func (camera *camera) Do() {
 		camera.config.Host,
 		camera.config.Port,
 		events)
-	log.Printf("URL: %s", url)
+	log.Printf("%s URL: %s", camera.config.Host, url)
 	go func() {
+		var res *http.Response
+		MAIN:
 		for {
-			var res *http.Response
 			if !camera.connected {
 				var err error
 				if res, err = camera.client.Get(url); err != nil {
-					log.Printf("Get error: %+v", err)
+					log.Printf("%s Get error: %+v", camera.config.Host, err)
 					time.Sleep(1 * time.Second)
-					log.Printf("Reconnect...")
-					continue
+					log.Printf("%s Reconnect...", camera.config.Host)
+					continue MAIN
+				} else {
+					log.Printf("%s Header: %+v", camera.config.Host, res.Header)
+					camera.connected = true
+					log.Printf("%s Connected", camera.config.Host)
 				}
 			}
-			log.Printf("Header: %+v\n", res.Header)
-			log.Println("Read data")
+			log.Printf("%s Read data", camera.config.Host)
 			result := make([]byte, 0)
 			data := make([]byte, dataBlockSize)
 			for {
 				n, err := res.Body.Read(data)
 				if err != nil {
-					log.Printf("Read error: %+v", err)
+					log.Printf("%s Read error: %+v", camera.config.Host, err)
 					camera.connected = false
-					log.Printf("Reconnect...")
-					break
+					log.Printf("%s Reconnect...", camera.config.Host)
+					continue MAIN
 				}
 				if n > 0 {
 					result = append(result, data[:n]...)
 				}
 				if n != dataBlockSize {
+					time.Sleep(1 * time.Second)
 					break
 				}
 			}
-			log.Printf("Body:\n%+v", string(result))
-			event := Event{
+			log.Printf("%s Body:\n%+v", camera.config.Host, string(result))
+			e := event.Event{
 				Camera: camera.config.Host,
-				Topic: camera.config.Topic,
+				Topic:  camera.config.Topic,
 			}
 			for _, s := range strings.Split(string(result), "\r\n") {
 				if strings.HasPrefix(s, "Code=") {
@@ -96,15 +125,17 @@ func (camera *camera) Do() {
 						r := strings.Split(s1, "=")
 						switch r[0] {
 						case "Code":
-							event.Code = r[1]
+							e.Code = r[1]
 						case "action":
-							event.Action = r[1]
-							event.Action = camera.config.Map[event.Action]
+							e.Action = r[1]
+							if camera.config.Map != nil {
+								e.Action = camera.config.Map[e.Action]
+							}
 						case "index":
-							event.Index = r[1]
+							e.Index = r[1]
 						}
 					}
-					camera.eventChannel <- event
+					camera.eventChannel <- e
 				}
 			}
 		}
