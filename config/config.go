@@ -36,7 +36,7 @@ func Init() Configuration {
 	if fileName == "" {
 		fileName = configFile
 	}
-	file, err := os.Open(configFile)
+	file, err := os.Open(fileName)
 	if err != nil {
 		panic(err)
 	}
