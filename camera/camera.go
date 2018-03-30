@@ -18,12 +18,12 @@ package camera
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 	"errors"
 	"dahuaevents2mqtt/event"
+	"github.com/jvehent/service-go"
 )
 
 type Config struct {
@@ -43,9 +43,10 @@ type camera struct {
 	connected        bool
 	eventChannel     chan event.Event
 	reconnectTimeout time.Duration
+	log service.Logger
 }
 
-func Init(config Config, channel chan event.Event) (*camera, error) {
+func Init(config Config, channel chan event.Event, log service.Logger) (*camera, error) {
 	camera := new(camera)
 	camera.config = config
 	if camera.config.Topic == "" {
@@ -74,6 +75,7 @@ func Init(config Config, channel chan event.Event) (*camera, error) {
 	} else {
 		camera.reconnectTimeout = time.Duration(config.ReconnectTimeout) * time.Second
 	}
+	camera.log = log
 	return camera, nil
 }
 
@@ -82,6 +84,8 @@ func (camera *camera) Connected() bool {
 }
 
 func (camera *camera) ReceiveEvents() {
+
+	log := camera.log
 
 	const dataBlockSize = 1024
 
@@ -93,7 +97,7 @@ func (camera *camera) ReceiveEvents() {
 		camera.config.Host,
 		camera.config.Port,
 		events)
-	log.Printf("%s URL: %s", camera.config.Host, url)
+	log.Info("%s URL: %s", camera.config.Host, url)
 	go func() {
 		var res *http.Response
 		MAIN:
@@ -101,25 +105,25 @@ func (camera *camera) ReceiveEvents() {
 			if !camera.connected {
 				var err error
 				if res, err = camera.client.Get(url); err != nil {
-					log.Printf("%s Get error: %+v", camera.config.Host, err)
+					log.Error("%s Get error: %+v", camera.config.Host, err)
 					time.Sleep(1 * time.Second)
-					log.Printf("%s Reconnect...", camera.config.Host)
+					log.Error("%s Reconnect...", camera.config.Host)
 					continue MAIN
 				} else {
-					log.Printf("%s Header: %+v", camera.config.Host, res.Header)
+					log.Info("%s Header: %+v", camera.config.Host, res.Header)
 					camera.connected = true
-					log.Printf("%s Connected", camera.config.Host)
+					log.Info("%s Connected", camera.config.Host)
 				}
 			}
-			log.Printf("%s Read data", camera.config.Host)
+			log.Info("%s Read data", camera.config.Host)
 			result := make([]byte, 0)
 			data := make([]byte, dataBlockSize)
 			for {
 				n, err := res.Body.Read(data)
 				if err != nil {
-					log.Printf("%s Read error: %+v", camera.config.Host, err)
+					log.Error("%s Read error: %+v", camera.config.Host, err)
 					camera.connected = false
-					log.Printf("%s Reconnect...", camera.config.Host)
+					log.Error("%s Reconnect...", camera.config.Host)
 					continue MAIN
 				}
 				if n > 0 {
@@ -130,7 +134,7 @@ func (camera *camera) ReceiveEvents() {
 					break
 				}
 			}
-			log.Printf("%s Body:\n%+v", camera.config.Host, string(result))
+			log.Info("%s Body:\n%+v", camera.config.Host, string(result))
 			e := event.Event{
 				Camera: camera.config.Host,
 				Topic:  camera.config.Topic,

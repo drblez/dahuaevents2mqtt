@@ -17,14 +17,87 @@
 package main
 
 import (
-	"dahuaevents2mqtt/camera"
-	"dahuaevents2mqtt/config"
 	"fmt"
 	"dahuaevents2mqtt/event"
+	"dahuaevents2mqtt/camera"
+	"dahuaevents2mqtt/config"
 	MQTT "dahuaevents2mqtt/mqtt"
+	"github.com/jvehent/service-go"
+	"os"
 )
 
+var log service.Logger
+var exit = make(chan struct{})
+
 func main() {
+
+	var name = "dahuaevents2mqtt"
+	var displayName = "dahuaevents2mqtt"
+	var desc = "Send Dahua IPC events to MQTT broker"
+
+	var s, err = service.NewService(name, displayName, desc)
+	log = s
+
+	if err != nil {
+		fmt.Printf("%s unable to start: %s", displayName, err)
+		return
+	}
+
+	if len(os.Args) > 1 {
+		var err error
+		verb := os.Args[1]
+		fmt.Printf("Verb is %s\n", verb)
+		switch verb {
+		case "install":
+			err = s.Install()
+			if err != nil {
+				fmt.Printf("Failed to install: %s\n", err)
+				return
+			}
+			fmt.Printf("Service \"%s\" installed.\n", displayName)
+		case "remove":
+			err = s.Remove()
+			if err != nil {
+				fmt.Printf("Failed to remove: %s\n", err)
+				return
+			}
+			fmt.Printf("Service \"%s\" removed.\n", displayName)
+		case "run":
+			do(exit, log, true)
+		case "start":
+			err = s.Start()
+			if err != nil {
+				fmt.Printf("Failed to start: %s\n", err)
+				return
+			}
+			fmt.Printf("Service \"%s\" started.\n", displayName)
+		case "stop":
+			err = s.Stop()
+			if err != nil {
+				fmt.Printf("Failed to stop: %s\n", err)
+				return
+			}
+			fmt.Printf("Service \"%s\" stopped.\n", displayName)
+		}
+		return
+	}
+	err = s.Run(func() error {
+		// start
+		fmt.Println("Start service")
+		go do(exit, log, false)
+		return nil
+	}, func() error {
+		// stop
+		exit <- struct{}{}
+		return nil
+	})
+	if err != nil {
+		s.Error(err.Error())
+	}
+
+}
+
+func do(exit chan struct{}, log service.Logger, runCommand bool) {
 
 	configuration := config.Init()
 
@@ -32,16 +105,20 @@ func main() {
 
 	eventChan := make(chan event.Event, len(configuration.Cameras))
 
-	mqtt := MQTT.Init(configuration.MQTT, eventChan)
+	mqtt := MQTT.Init(configuration.MQTT, eventChan, log)
 
 
 	for i, camConfig := range configuration.Cameras {
-		cam, err := camera.Init(camConfig, eventChan)
+		cam, err := camera.Init(camConfig, eventChan, log)
 		if err != nil {
 			panic(fmt.Errorf("init: cam %d (%s/[%s] error", i, camConfig.Host, camConfig.Topic))
 		}
 		cam.ReceiveEvents()
 	}
 
-	mqtt.SendEvents()
+	mqtt.SendEvents(exit)
+
+	if runCommand {
+		for {}
+	}
 }
