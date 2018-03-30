@@ -32,6 +32,10 @@ type Configuration struct {
 }
 
 func Init() Configuration {
+	fileName := os.Getenv("DAHUAEVENTS2MQTT_CONFIG")
+	if fileName == "" {
+		fileName = configFile
+	}
 	file, err := os.Open(configFile)
 	if err != nil {
 		panic(err)
