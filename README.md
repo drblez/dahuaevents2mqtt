@@ -34,6 +34,12 @@
       }
     }
 
+## Configuration file location
+
+Service look configuration file in running path or in path from environment variable, ex.:
+
+    DAHUAEVENTS2MQTT_CONFIG=\etc\dahuaevents2mqtt\dahuaevents2mqtt.json
+
 ## Camera parameters
 
 - Host (string, no default value) camera host, ex. *"192.168.1.248"*;
